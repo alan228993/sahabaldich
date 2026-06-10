@@ -181,20 +181,36 @@ function updateMainCanvas() {
 
 onAuthStateChanged(auth, async (firebaseUser) => {
     if (firebaseUser) {
+        // Принудительно переводим почту вошедшего юзера в нижний регистр
+        const currentUserEmail = firebaseUser.email.toLowerCase();
+        
+        // Проверяем, есть ли этот email в списке админов (тоже переводя список в нижний регистр)
+        const checkAdmin = state.adminEmails
+            .map(email => email.toLowerCase())
+            .includes(currentUserEmail);
+
         state.user = {
             email: firebaseUser.email,
-            isAdmin: state.adminEmails.includes(firebaseUser.email)
+            isAdmin: checkAdmin
         };
         
+        // Обновляем базовый UI
         loginBtn.classList.add('hidden');
         userInfo.classList.remove('hidden');
         usernameSpan.innerText = firebaseUser.email;
         
+        // Включаем или выключаем админ-панель в зависимости от результата проверки
         if(state.user.isAdmin) {
             document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
             document.getElementById('admin-badge').classList.remove('hidden');
+            console.log("Доступ разрешен: вы зашли как Администратор!");
+        } else {
+            document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
+            document.getElementById('admin-badge').classList.add('hidden');
+            console.log("Доступ ограничен: вы зашли как обычный пользователь.");
         }
     } else {
+        // Пользователь не авторизован
         state.user = null;
         loginBtn.classList.remove('hidden');
         userInfo.classList.add('hidden');
