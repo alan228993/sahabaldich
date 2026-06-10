@@ -34,7 +34,7 @@ let state = {
     currentSheetId: null,
     currentTool: 'pencil',
     currentColor: '#000000',
-    adminEmails: ['Serikbayev_A19@nisa.edu.kz'] // Сюда впиши почту админа
+    adminEmails: ['7777773699alan@gmail.com'] // Сюда впиши почту админа
 };
 
 // Буфер для инструмента Выделения (Копировать/Вставить)
