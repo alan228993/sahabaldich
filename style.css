@@ -21,17 +21,17 @@ body {
     width: 100vw;
     height: 100vh;
     z-index: -1;
-    background: linear-gradient(135deg, 
-        #009543 0%, #009543 45%, 
-        #fbdd09 45%, #fbdd09 55%, 
-        #dc241f 55%, #dc241f 100%
-    );
+    background-image: url('IMG-20251103-WA0007.jpg');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
 }
+
 .congo-bg::after {
     content: '';
     position: absolute;
     top: 0; left: 0; width: 100%; height: 100%;
-    background: var(--bg-dark); /* Затемнение */
+    background: rgba(0, 0, 0, 0.6);
 }
 
 .container {
@@ -46,6 +46,19 @@ header {
     align-items: center;
     border-bottom: 2px solid rgba(255,255,255,0.1);
     padding-bottom: 20px;
+}
+
+.auth-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.auth-buttons {
+    display: flex;
+    align-items: center;
+    gap: 15px;
 }
 
 button {
@@ -80,9 +93,9 @@ button:hover { background: #2980b9; }
     align-items: center;
     box-shadow: 0 8px 16px rgba(0,0,0,0.3);
     position: relative;
-    transition: transform 0.2s;
+    transition: all 0.2s;
+    opacity: 0.6; /* Изначально полупрозрачные до участия в голосовании */
 }
-.sheet-card:hover { transform: translateY(-5px); }
 
 .sheet-preview {
     width: 100%;
@@ -204,4 +217,45 @@ canvas {
     float: right;
     font-size: 28px;
     cursor: pointer;
+}
+
+/* СИСТЕМА ГОЛОСОВАНИЯ */
+
+/* Листы становятся активными и кликабельными только после кнопки Участвовать */
+.sheet-card.active-voting {
+    opacity: 1;
+    cursor: pointer;
+    border: 2px dashed #b4b8bc;
+}
+.sheet-card.active-voting:hover {
+    transform: translateY(-5px);
+    border-color: #3498db;
+}
+
+/* Карточка листа, за который отдан текущий голос пользователя */
+.sheet-card.my-vote {
+    border: 3px solid #28a745 !important;
+    background-color: rgba(40, 167, 69, 0.05);
+    box-shadow: 0 8px 20px rgba(40, 167, 69, 0.3);
+}
+.sheet-card.my-vote::before {
+    content: "✓ Твой выбор";
+    position: absolute;
+    top: -12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #28a745;
+    color: white;
+    padding: 3px 10px;
+    font-size: 0.75rem;
+    border-radius: 10px;
+    font-weight: bold;
+    z-index: 5;
+}
+
+.status-text {
+    font-size: 0.85rem;
+    font-style: italic;
+    opacity: 0.9;
+    text-align: right;
 }

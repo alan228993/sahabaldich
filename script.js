@@ -3,12 +3,11 @@
 // ==========================================
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-import { getFirestore, doc, setDoc, onSnapshot, collection, getDocs } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+import { getFirestore, doc, setDoc, getDoc, updateDoc, increment, onSnapshot, collection, getDocs, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
 // ==========================================
 // 2. КОНФИГУРАЦИЯ И ИНИЦИАЛИЗАЦИЯ FB
 // ==========================================
-// Замени эти заглушки на реальные ключи из твоего кабинета Firebase!
 const firebaseConfig = {
     apiKey: "AIzaSyDQrS0gc18kU941W2Xxbof-ChQTZZBWv38",
     authDomain: "sahabaldich.firebaseapp.com",
@@ -17,28 +16,38 @@ const firebaseConfig = {
     messagingSenderId: "351962538384",
     appId: "1:351962538384:web:ef72e1a4f1d2c08309d315",
     measurementId: "G-VGJMT00ES8"
-  };
+};
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const provider = new GoogleAuthProvider();
 
+// Глобальный буфер обмена для работы между листами
+let globalClipboardData = null;
+
+// Получение или генерация анонимного ID для голосования без учетки
+if (!localStorage.getItem('anonymous_vote_id')) {
+    localStorage.setItem('anonymous_vote_id', 'anon_' + Math.random().toString(36).substring(2, 15));
+}
+const voterId = localStorage.getItem('anonymous_vote_id');
+
 // ==========================================
 // 3. ГЛОБАЛЬНОЕ СОСТОЯНИЕ ПРИЛОЖЕНИЯ
 // ==========================================
 let state = {
     user: null, 
-    sheets: [], // Данные динамически прилетят из облака Firestore
-    hasVotedToday: false,
+    sheets: [], 
     currentSheetId: null,
     currentTool: 'pencil',
     currentColor: '#000000',
-    adminEmails: ['7777773699alan@gmail.com'] // Сюда впиши почту админа
+    adminEmails: ['7777773699alan@gmail.com'],
+    voting: {
+        joined: false,      
+        votedFor: null      
+    }
 };
 
-// Буфер для инструмента Выделения (Копировать/Вставить)
-let clipboardData = null;
 let selectionRect = null;
 let isDrawing = false;
 let startX, startY;
@@ -55,38 +64,66 @@ const usernameSpan = document.getElementById('username');
 const canvas = document.getElementById('paint-canvas');
 const ctx = canvas.getContext('2d');
 
-// Создаем виртуальные скрытые холсты для разделения слоев рисования
+const joinVotingBtn = document.getElementById('join-voting-btn');
+const skipVotingBtn = document.getElementById('skip-voting-btn');
+const leaveVotingBtn = document.getElementById('leave-voting-btn');
+const votingStatus = document.getElementById('voting-status');
+
 const pencilCanvas = document.createElement('canvas');
 const penCanvas = document.createElement('canvas');
 const pCtx = pencilCanvas.getContext('2d');
 const penCtx = penCanvas.getContext('2d');
 [pencilCanvas, penCanvas].forEach(c => { c.width = 800; c.height = 600; });
 
+function getTodayDateString() {
+    const today = new Date();
+    return today.toISOString().split('T')[0]; 
+}
+
 // ==========================================
 // 5. ЛОГИКА РАБОТЫ С БАЗОЙ ДАННЫХ
 // ==========================================
 
-// Первичная генерация 10 листов в облаке (если база пустая)
 async function initializeSheetsInDB() {
+    const todayStr = getTodayDateString();
+    const metaRef = doc(db, "system", "voting_metadata");
+    
+    let lastActiveDate = "";
+    try {
+        const metaSnap = await getDoc(metaRef);
+        if (metaSnap.exists()) {
+            lastActiveDate = metaSnap.data().lastDate;
+        }
+    } catch(e) { 
+        console.log("Первый запуск метаданных"); 
+    }
+    
     const sheetsRef = collection(db, "sheets");
     const snapshot = await getDocs(sheetsRef);
     
-    if (snapshot.size <= 1) { 
+    if (lastActiveDate !== todayStr || snapshot.size <= 1) { 
+        console.log("Новый день или пустая база! Обнуляем голоса до 0...");
         for (let i = 1; i <= 10; i++) {
-            await setDoc(doc(db, "sheets", `sheet_${i}`), {
-                id: i,
-                pencilData: "", 
-                penData: "",
-                lastModifiedBy: "Система",
-                lastModifiedTime: "00:00",
-                votes: 0
-            });
+            const docRef = doc(db, "sheets", `sheet_${i}`);
+            const docSnap = await getDoc(docRef);
+            
+            if (docSnap.exists()) {
+                await updateDoc(docRef, { votes: 0 });
+            } else {
+                await setDoc(docRef, {
+                    id: i,
+                    pencilData: "", 
+                    penData: "",
+                    lastModifiedBy: "Система",
+                    lastModifiedTime: "00:00",
+                    votes: 0
+                });
+            }
         }
-        console.log("База данных успешно проинициализирована 10 листами!");
+        await setDoc(metaRef, { lastDate: todayStr });
     }
 }
 
-// Прослушивание изменений на сервере в реальном времени
 function startListeningToSheets() {
     onSnapshot(collection(db, "sheets"), (snapshot) => {
         let updatedSheets = [];
@@ -96,7 +133,6 @@ function startListeningToSheets() {
             }
         });
         
-        // Сортируем листы по порядку (1-10) и обновляем экран
         state.sheets = updatedSheets.sort((a, b) => a.id - b.id);
         renderSheetsGrid();
         checkDailyVoteEnded();
@@ -112,8 +148,11 @@ function renderSheetsGrid() {
     state.sheets.forEach(sheet => {
         const card = document.createElement('div');
         card.className = 'sheet-card';
+        card.id = `sheet_${sheet.id}`;
         
-        // Создаем мини-превью листа, склеивая слои из Базы Данных
+        if (state.voting.joined) card.classList.add('active-voting');
+        if (state.voting.votedFor === `sheet_${sheet.id}`) card.classList.add('my-vote');
+        
         const previewCanvas = document.createElement('canvas');
         previewCanvas.width = 800; previewCanvas.height = 600;
         previewCanvas.className = 'sheet-preview';
@@ -137,38 +176,28 @@ function renderSheetsGrid() {
 
         const editBtn = document.createElement('button');
         editBtn.innerText = 'Редактировать';
-        editBtn.onclick = () => openEditor(sheet.id);
+        editBtn.onclick = (e) => {
+            e.stopPropagation(); 
+            openEditor(sheet.id);
+        };
         card.appendChild(editBtn);
 
-        // Блок Голосования
         const voteBox = document.createElement('div');
         voteBox.className = 'vote-section';
-        voteBox.innerHTML = `<span>Голосов: ${sheet.votes}</span>`;
-        
-        const voteBtn = document.createElement('button');
-        voteBtn.innerText = '👍';
-        voteBtn.disabled = state.hasVotedToday;
-        voteBtn.onclick = async () => {
-            await setDoc(doc(db, "sheets", `sheet_${sheet.id}`), {
-                ...sheet,
-                votes: sheet.votes + 1
-            });
-            state.hasVotedToday = true;
-        };
-        voteBox.appendChild(voteBtn);
+        voteBox.innerHTML = `<span>Голосов: ${sheet.votes || 0}</span>`;
         card.appendChild(voteBox);
 
-        // Авторы изменений
         const meta = document.createElement('div');
         meta.className = 'sheet-meta';
         meta.innerHTML = `Изменил: ${sheet.lastModifiedBy}<br>Время: ${sheet.lastModifiedTime}`;
         card.appendChild(meta);
 
+        card.onclick = () => handleVote(`sheet_${sheet.id}`);
+
         sheetsContainer.appendChild(card);
     });
 }
 
-// Склеивание двух виртуальных слоев (Карандаш/Ручка) на главный экран редактора
 function updateMainCanvas() {
     ctx.clearRect(0,0,800,600);
     ctx.drawImage(pencilCanvas, 0, 0);
@@ -176,41 +205,32 @@ function updateMainCanvas() {
 }
 
 // ==========================================
-// 7. СИСТЕМА АВТОРИЗАЦИИ (GOOGLE AUTH)
+// 7. СИСТЕМА АВТОРИЗАЦИИ И ГОЛОСОВАНИЯ
 // ==========================================
 
 onAuthStateChanged(auth, async (firebaseUser) => {
     if (firebaseUser) {
-        // Принудительно переводим почту вошедшего юзера в нижний регистр
         const currentUserEmail = firebaseUser.email.toLowerCase();
-        
-        // Проверяем, есть ли этот email в списке админов (тоже переводя список в нижний регистр)
-        const checkAdmin = state.adminEmails
-            .map(email => email.toLowerCase())
-            .includes(currentUserEmail);
+        const checkAdmin = state.adminEmails.map(email => email.toLowerCase()).includes(currentUserEmail);
 
         state.user = {
+            uid: firebaseUser.uid,
             email: firebaseUser.email,
             isAdmin: checkAdmin
         };
         
-        // Обновляем базовый UI
         loginBtn.classList.add('hidden');
         userInfo.classList.remove('hidden');
         usernameSpan.innerText = firebaseUser.email;
         
-        // Включаем или выключаем админ-панель в зависимости от результата проверки
         if(state.user.isAdmin) {
             document.querySelectorAll('.admin-only').forEach(el => el.classList.remove('hidden'));
             document.getElementById('admin-badge').classList.remove('hidden');
-            console.log("Доступ разрешен: вы зашли как Администратор!");
         } else {
             document.querySelectorAll('.admin-only').forEach(el => el.classList.add('hidden'));
             document.getElementById('admin-badge').classList.add('hidden');
-            console.log("Доступ ограничен: вы зашли как обычный пользователь.");
         }
     } else {
-        // Пользователь не авторизован
         state.user = null;
         loginBtn.classList.remove('hidden');
         userInfo.classList.add('hidden');
@@ -218,17 +238,36 @@ onAuthStateChanged(auth, async (firebaseUser) => {
         document.getElementById('admin-badge').classList.add('hidden');
     }
     
-    // Подключаем базу только после проверки сессии юзера
+    // Подгружаем статус голосования (привязано к VoterId, работает и без аккаунта)
+    const todayStr = getTodayDateString();
+    const voteSnap = await getDoc(doc(db, "votes", voterId));
+    
+    if (voteSnap.exists() && voteSnap.data().date === todayStr) {
+        state.voting.joined = true;
+        state.voting.votedFor = voteSnap.data().sheetId;
+        joinVotingBtn.classList.add('hidden');
+        leaveVotingBtn.classList.remove('hidden');
+        skipVotingBtn.classList.remove('hidden');
+        
+        if(state.voting.votedFor === "none") {
+            votingStatus.innerText = "Вы проголосовали за никого. Выберите лист из списка, если передумаете!";
+        } else {
+            const sheetNumber = state.voting.votedFor.replace("sheet_", "");
+            votingStatus.innerText = `Вы участвуете. Ваш выбор: Лист #${sheetNumber}. Кликни на другой лист, чтобы изменить выбор.`;
+        }
+    } else {
+        joinVotingBtn.classList.remove('hidden');
+        leaveVotingBtn.classList.add('hidden');
+        skipVotingBtn.classList.add('hidden');
+        votingStatus.innerText = "Голосование доступно всем! Нажмите кнопку, чтобы начать.";
+    }
+
     await initializeSheetsInDB();
     startListeningToSheets(); 
 });
 
 loginBtn.onclick = async () => {
-    try {
-        await signInWithPopup(auth, provider);
-    } catch (error) {
-        console.error("Ошибка входа Google:", error);
-    }
+    try { await signInWithPopup(auth, provider); } catch (error) { console.error("Ошибка входа Google:", error); }
 };
 
 usernameSpan.style.cursor = "pointer";
@@ -236,22 +275,183 @@ usernameSpan.onclick = () => {
     if(confirm("Вы хотите выйти из аккаунта?")) signOut(auth);
 };
 
+/* КНОПКА УЧАСТВОВАТЬ */
+joinVotingBtn.onclick = () => {
+    state.voting.joined = true;
+    joinVotingBtn.classList.add('hidden');
+    leaveVotingBtn.classList.remove('hidden');
+    skipVotingBtn.classList.remove('hidden');
+    votingStatus.innerText = "Вы в игре! Выберите любой лист или скипните выбор.";
+    renderSheetsGrid(); 
+};
+
+/* КНОПКА ВЫЙТИ ИЗ РЕЖИМА ГОЛОСОВАНИЯ (ГОЛОС СОХРАНЯЕТСЯ) */
+leaveVotingBtn.onclick = () => {
+    state.voting.joined = false;
+    leaveVotingBtn.classList.add('hidden');
+    skipVotingBtn.classList.add('hidden');
+    joinVotingBtn.classList.remove('hidden');
+    votingStatus.innerText = "Режим голосования закрыт. Ваш текущий голос сохранён в базе!";
+    renderSheetsGrid();
+};
+
+/* КНОПКА ПРОГОЛОСОВАТЬ ЗА НИКОГО (СКИП) */
+skipVotingBtn.onclick = async () => {
+    if (!state.voting.joined) return;
+    if (state.voting.votedFor === "none") return alert("Вы уже проголосовали за никого!");
+
+    const todayStr = getTodayDateString();
+    const voteDocRef = doc(db, "votes", voterId);
+
+    try {
+        if (state.voting.votedFor && state.voting.votedFor !== "none") {
+            await updateDoc(doc(db, "sheets", state.voting.votedFor), { votes: increment(-1) });
+        }
+        await setDoc(voteDocRef, { sheetId: "none", date: todayStr });
+        state.voting.votedFor = "none";
+        votingStatus.innerText = "Вы выбрали вариант 'Ни за кого'. Старые голоса списаны.";
+        renderSheetsGrid();
+    } catch (e) {
+        console.error(e);
+    }
+};
+
+async function handleVote(sheetId) {
+    if (!state.voting.joined) return alert("Нажмите кнопку 'Участвовать в голосовании' в шапке сайта!");
+    if (state.voting.votedFor === sheetId) return; 
+
+    const todayStr = getTodayDateString();
+    const voteDocRef = doc(db, "votes", voterId);
+    const targetSheetNumber = sheetId.replace("sheet_", "");
+
+    try {
+        if (state.voting.votedFor === null) {
+            await updateDoc(doc(db, "sheets", sheetId), { votes: increment(1) });
+            await setDoc(voteDocRef, { sheetId: sheetId, date: todayStr });
+            state.voting.votedFor = sheetId;
+            votingStatus.innerText = `Голос принят за Лист #${targetSheetNumber}! Можно изменить выбор кликом на другой лист.`;
+        } else {
+            const oldSheetId = state.voting.votedFor;
+            if (oldSheetId !== "none") {
+                const oldSheetNumber = oldSheetId.replace("sheet_", "");
+                await updateDoc(doc(db, "sheets", oldSheetId), { votes: increment(-1) });
+                votingStatus.innerText = `Вы передумали! Голос перенесён с Листа #${oldSheetNumber} на Лист #${targetSheetNumber}.`;
+            } else {
+                votingStatus.innerText = `Голос принят за Лист #${targetSheetNumber}!`;
+            }
+            
+            await updateDoc(doc(db, "sheets", sheetId), { votes: increment(1) });
+            await setDoc(voteDocRef, { sheetId: sheetId, date: todayStr });
+            state.voting.votedFor = sheetId;
+        }
+    } catch (error) {
+        console.error(error);
+        alert("Ошибка отправки голоса.");
+    }
+}
+
 // ==========================================
-// 8. ДВИЖОК РИСОВАНИЯ (PAINT ENGINE)
+// 8. ДВИЖОК РИСОВАНИЯ (PAINT ENGINE) + УМНАЯ ЗАЛИВКА
 // ==========================================
 
-function openEditor(id) {
-    if (!state.user) {
-        alert("Зарегистрируйтесь через Google, чтобы получить доступ к изменению листочков!");
-        loginBtn.click();
-        return;
+// Алгоритм правильной заливки замкнутых областей (Flood Fill)
+function floodFill(canvasElement, startX, startY, fillColor) {
+    const context = canvasElement.getContext('2d');
+    const imageWidth = canvasElement.width;
+    const imageHeight = canvasElement.height;
+    
+    const imageData = context.getImageData(0, 0, imageWidth, imageHeight);
+    const rawPixels = imageData.data;
+
+    const targetPos = (startY * imageWidth + startX) * 4;
+    const startR = rawPixels[targetPos];
+    const startG = rawPixels[targetPos + 1];
+    const startB = rawPixels[targetPos + 2];
+    const startA = rawPixels[targetPos + 3];
+
+    // Конвертируем HEX цвет заливки в RGBA структуру
+    const fillComponents = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(fillColor);
+    const fillR = parseInt(fillComponents[1], 16);
+    const fillG = parseInt(fillComponents[2], 16);
+    const fillB = parseInt(fillComponents[3], 16);
+    const fillA = 255;
+
+    // Если цвета совпадают, заливать не нужно
+    if (startR === fillR && startG === fillG && startB === fillB && startA === fillA) return;
+
+    const matchColor = (pos) => {
+        return rawPixels[pos] === startR && 
+               rawPixels[pos + 1] === startG && 
+               rawPixels[pos + 2] === startB && 
+               rawPixels[pos + 3] === startA;
+    };
+
+    const colorPixel = (pos) => {
+        rawPixels[pos] = fillR;
+        rawPixels[pos + 1] = fillG;
+        rawPixels[pos + 2] = fillB;
+        rawPixels[pos + 3] = fillA;
+    };
+
+    let pixelQueue = [[startX, startY]];
+
+    while (pixelQueue.length > 0) {
+        let currentPoint = pixelQueue.pop();
+        let curX = currentPoint[0];
+        let curY = currentPoint[1];
+
+        let currentPos = (curY * imageWidth + curX) * 4;
+
+        while (curY >= 0 && matchColor(currentPos)) {
+            curY--;
+            currentPos -= imageWidth * 4;
+        }
+
+        currentPos += imageWidth * 4;
+        curY++;
+
+        let checkLeft = false;
+        let checkRight = false;
+
+        while (curY < imageHeight && matchColor(currentPos)) {
+            colorPixel(currentPos);
+
+            if (curX > 0) {
+                if (matchColor(currentPos - 4)) {
+                    if (!checkLeft) {
+                        pixelQueue.push([curX - 1, curY]);
+                        checkLeft = true;
+                    }
+                } else if (checkLeft) {
+                    checkLeft = false;
+                }
+            }
+
+            if (curX < imageWidth - 1) {
+                if (matchColor(currentPos + 4)) {
+                    if (!checkRight) {
+                        pixelQueue.push([curX + 1, curY]);
+                        checkRight = true;
+                    }
+                } else if (checkRight) {
+                    checkRight = false;
+                }
+            }
+
+            curY++;
+            currentPos += imageWidth * 4;
+        }
     }
+    context.putImageData(imageData, 0, 0);
+}
+
+function openEditor(id) {
     state.currentSheetId = id;
     document.getElementById('current-sheet-title').innerText = `Редактирование Листа #${id}`;
     
     pCtx.clearRect(0,0,800,600);
     penCtx.clearRect(0,0,800,600);
-    pCtx.fillStyle = '#ffffff'; pCtx.fillRect(0,0,800,600); // Базовый белый фон
+    pCtx.fillStyle = '#ffffff'; pCtx.fillRect(0,0,800,600);
 
     let sheet = state.sheets.find(s => s.id === id);
     
@@ -260,38 +460,52 @@ function openEditor(id) {
 
     mainScreen.classList.add('hidden');
     editorScreen.classList.remove('hidden');
+    
+    // Если в глобальном буфере что-то есть, открываем интерфейс пасты
+    if (globalClipboardData) {
+        document.getElementById('clipboard-box').classList.remove('hidden');
+    }
     updateMainCanvas();
 }
 
 canvas.onmousedown = (e) => {
     isDrawing = true;
     const rect = canvas.getBoundingClientRect();
-    startX = e.clientX - rect.left;
-    startY = e.clientY - rect.top;
+    startX = Math.floor(e.clientX - rect.left);
+    startY = Math.floor(e.clientY - rect.top);
 
-    if(state.currentTool === 'pencil-bucket' || state.currentTool === 'pen-bucket') {
-        let targetCtx = (state.currentTool === 'pencil-bucket') ? pCtx : penCtx;
-        targetCtx.fillStyle = state.currentColor;
-        targetCtx.fillRect(0,0,800,600);
+    if(state.currentTool === 'pencil-bucket') {
+        floodFill(pencilCanvas, startX, startY, state.currentColor);
         updateMainCanvas();
+        isDrawing = false;
+    } else if(state.currentTool === 'pen-bucket') {
+        floodFill(penCanvas, startX, startY, state.currentColor);
+        updateMainCanvas();
+        isDrawing = false;
     }
 };
 
 canvas.onmousemove = (e) => {
     if(!isDrawing) return;
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const x = Math.floor(e.clientX - rect.left);
+    const y = Math.floor(e.clientY - rect.top);
 
     if (state.currentTool === 'pencil') {
         pCtx.lineWidth = 5; pCtx.lineCap = 'round'; pCtx.strokeStyle = state.currentColor;
         pCtx.beginPath(); pCtx.moveTo(startX, startY); pCtx.lineTo(x, y); pCtx.stroke();
+        startX = x; startY = y;
+        updateMainCanvas();
     } else if (state.currentTool === 'pen') {
         penCtx.lineWidth = 5; penCtx.lineCap = 'round'; penCtx.strokeStyle = state.currentColor;
-        penCtx.beginPath(); penCtx.moveTo(startX, startY); penCtx.lineTo(x, y); penCtx.stroke();
+        penCtx.beginPath(); penCtx.moveTo(startX, startY); pCtx.lineTo(x, y); penCtx.stroke();
+        startX = x; startY = y;
+        updateMainCanvas();
     } else if (state.currentTool === 'eraser') {
         pCtx.lineWidth = 20; pCtx.lineCap = 'round'; pCtx.strokeStyle = '#ffffff';
         pCtx.beginPath(); pCtx.moveTo(startX, startY); pCtx.lineTo(x, y); pCtx.stroke();
+        startX = x; startY = y;
+        updateMainCanvas();
     } else if (state.currentTool === 'super-eraser' && state.user?.isAdmin) {
         pCtx.lineWidth = 20; pCtx.lineCap = 'round'; pCtx.strokeStyle = '#ffffff';
         pCtx.beginPath(); pCtx.moveTo(startX, startY); pCtx.lineTo(x, y); pCtx.stroke();
@@ -301,21 +515,21 @@ canvas.onmousemove = (e) => {
         penCtx.lineWidth = 20; penCtx.lineCap = 'round';
         penCtx.beginPath(); penCtx.moveTo(startX, startY); penCtx.lineTo(x, y); penCtx.stroke();
         penCtx.restore();
+        startX = x; startY = y;
+        updateMainCanvas();
     } else if (state.currentTool === 'select') {
+        // Отрисовка рамки выделения без разрушения основных данных
         updateMainCanvas();
         ctx.strokeStyle = '#3498db'; ctx.lineWidth = 1; ctx.setLineDash([5, 5]);
         ctx.strokeRect(startX, startY, x - startX, y - startY);
         ctx.setLineDash([]);
-        selectionRect = {x: startX, y: startY, w: x - startX, h: y - startY};
+        selectionRect = { x: startX, y: startY, w: x - startX, h: y - startY };
     }
-
-    if(state.currentTool !== 'select') { startX = x; startY = y; }
-    updateMainCanvas();
 };
 
 canvas.onmouseup = () => {
     isDrawing = false;
-    if(state.currentTool === 'select') {
+    if(state.currentTool === 'select' && selectionRect && Math.abs(selectionRect.w) > 2) {
         document.getElementById('clipboard-box').classList.remove('hidden');
     }
 };
@@ -331,22 +545,24 @@ function setupEventListeners() {
             document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
             state.currentTool = btn.dataset.tool;
             btn.classList.add('active');
-            if(state.currentTool !== 'select') document.getElementById('clipboard-box').classList.add('hidden');
+            if(state.currentTool !== 'select' && !globalClipboardData) {
+                document.getElementById('clipboard-box').classList.add('hidden');
+            }
         };
     });
 
     document.getElementById('color-picker').onchange = (e) => { state.currentColor = e.target.value; };
 
-    // Кнопка сохранения изменений и отправки в Firestore
     document.getElementById('back-btn').onclick = async () => {
         let now = new Date();
         const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`;
         
+        const authorName = state.user ? state.user.email : "Аноним";
         const updatedData = {
             id: state.currentSheetId,
             pencilData: pencilCanvas.toDataURL(), 
             penData: penCanvas.toDataURL(),
-            lastModifiedBy: state.user.email,
+            lastModifiedBy: authorName,
             lastModifiedTime: timeStr,
             votes: state.sheets.find(s => s.id === state.currentSheetId)?.votes || 0 
         };
@@ -357,30 +573,59 @@ function setupEventListeners() {
         mainScreen.classList.remove('hidden');
     };
 
-    // Буфер: Выделение, Копирование и Вставка
+    /* РАБОТА С КЛИПБОРДОМ (РАБОТАЕТ МЕЖДУ ЛИСТАМИ) */
     document.getElementById('copy-btn').onclick = () => {
         if(!selectionRect) return;
-        clipboardData = ctx.getImageData(selectionRect.x, selectionRect.y, selectionRect.w, selectionRect.h);
-        alert("Выделенная часть скопирована!");
+        
+        // Создаем временный оффскрин холст для записи копируемой структуры
+        const copyTempCanvas = document.createElement('canvas');
+        copyTempCanvas.width = Math.abs(selectionRect.w);
+        copyTempCanvas.height = Math.abs(selectionRect.h);
+        const ctc = copyTempCanvas.getContext('2d');
+
+        // Вычисляем корректные координаты с учетом направления выделения
+        const sourceX = selectionRect.w < 0 ? selectionRect.x + selectionRect.w : selectionRect.x;
+        const sourceY = selectionRect.h < 0 ? selectionRect.y + selectionRect.h : selectionRect.y;
+        const targetW = Math.abs(selectionRect.w);
+        const targetH = Math.abs(selectionRect.h);
+
+        // Копируем склеенный холст
+        ctc.drawImage(canvas, sourceX, sourceY, targetW, targetH, 0, 0, targetW, targetH);
+        
+        // Сохраняем в глобальный буфер
+        globalClipboardData = {
+            image: copyTempCanvas,
+            width: targetW,
+            height: targetH
+        };
+        
+        alert("Часть рисунка скопирована в глобальный буфер! Вы можете вставить её на любой другой лист.");
     };
 
     document.getElementById('paste-btn').onclick = () => {
-        if(!clipboardData) return alert("Буфер пуст!");
-        pCtx.putImageData(clipboardData, 50, 50); 
+        if(!globalClipboardData) return alert("Буфер обмена пуст!");
+        
+        // Вставляем фрагмент по умолчанию в левый верхний угол слоя карандаша
+        pCtx.drawImage(globalClipboardData.image, 50, 50);
         updateMainCanvas();
+        alert("Элемент успешно импортирован на текущий лист!");
     };
 
     document.getElementById('delete-selection-btn').onclick = () => {
         if(!selectionRect) return;
+        const sourceX = selectionRect.w < 0 ? selectionRect.x + selectionRect.w : selectionRect.x;
+        const sourceY = selectionRect.h < 0 ? selectionRect.y + selectionRect.h : selectionRect.y;
+        const targetW = Math.abs(selectionRect.w);
+        const targetH = Math.abs(selectionRect.h);
+
         pCtx.fillStyle = '#ffffff';
-        pCtx.fillRect(selectionRect.x, selectionRect.y, selectionRect.w, selectionRect.h);
+        pCtx.fillRect(sourceX, sourceY, targetW, targetH);
         if(state.user?.isAdmin) {
-            penCtx.clearRect(selectionRect.x, selectionRect.y, selectionRect.w, selectionRect.h);
+            penCtx.clearRect(sourceX, sourceY, targetW, targetH);
         }
         updateMainCanvas();
     };
 
-    // Админские инструменты очистки/клонирования
     document.getElementById('admin-clear-sheet').onclick = async () => {
         if(!confirm("Удалить всё содержимое листа?")) return;
         pCtx.fillStyle = '#ffffff'; pCtx.fillRect(0,0,800,600);
@@ -396,7 +641,7 @@ function setupEventListeners() {
                 id: targetId,
                 pencilData: pencilCanvas.toDataURL(),
                 penData: penCanvas.toDataURL(),
-                lastModifiedBy: `Админ (${state.user.email})`,
+                lastModifiedBy: `Админ (${state.user ? state.user.email : "Аноним"})`,
                 lastModifiedTime: "Только что",
                 votes: currentVotes
             });
@@ -404,7 +649,6 @@ function setupEventListeners() {
         }
     };
 
-    // Управление модальным окном "Пьедестал"
     const modal = document.getElementById('pedestal-modal');
     document.getElementById('pedestal-btn').onclick = () => modal.classList.remove('hidden');
     document.querySelector('.close-modal').onclick = () => modal.classList.add('hidden');
@@ -419,7 +663,7 @@ function checkDailyVoteEnded() {
     let tie = false;
 
     state.sheets.forEach(s => {
-        if(s.votes > maxVotes) {
+        if((s.votes || 0) > maxVotes) {
             maxVotes = s.votes; winnerSheet = s; tie = false;
         } else if (s.votes === maxVotes && maxVotes > 0) {
             tie = true;
@@ -456,5 +700,4 @@ function checkDailyVoteEnded() {
     }
 }
 
-// Запуск прослушивания событий UI при загрузке документа
 setupEventListeners();

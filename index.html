@@ -15,8 +15,17 @@
         <header>
             <h1>саха листы</h1>
             <div class="auth-panel">
-                <button id="google-login-btn">Войти через Google</button>
-                <span id="user-info" class="hidden">Привет, <span id="username"></span>!</span>
+                <div class="auth-buttons">
+                    <button id="google-login-btn">Войти через Google</button>
+                    <span id="user-info" class="hidden">йо <span id="username"></span>!</span>
+                </div>
+                <!-- Кнопки управления голосованием (Доступны всем без исключения) -->
+                <div class="voting-controls" style="display: flex; gap: 10px; margin-top: 5px;">
+                    <button id="join-voting-btn" style="background: #28a745;">Участвовать в голосовании</button>
+                    <button id="skip-voting-btn" class="hidden" style="background: #f39c12;">Проголосовать за никого (Скип)</button>
+                    <button id="leave-voting-btn" class="hidden" style="background: #7f8c8d;">Выйти из голосования</button>
+                </div>
+                <div id="voting-status" class="status-text" style="color: #fff; margin-top: 5px;"></div>
             </div>
         </header>
 
