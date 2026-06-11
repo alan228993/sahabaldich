@@ -1,0 +1,261 @@
+:root {
+    --primary-color: #2c3e50;
+    --accent-color: #3498db;
+    --bg-dark: rgba(0, 0, 0, 0.75);
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: #fff;
+    overflow-x: hidden;
+    background-color: #111;
+}
+
+/* Затенённый Флаг Конго на фоне */
+.congo-bg {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    z-index: -1;
+    background-image: url('IMG-20251103-WA0007.jpg');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+.congo-bg::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid rgba(255,255,255,0.1);
+    padding-bottom: 20px;
+}
+
+.auth-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+}
+
+.auth-buttons {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+button {
+    background: var(--accent-color);
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background 0.2s;
+}
+button:hover { background: #2980b9; }
+
+.hidden { display: none !important; }
+
+/* Сетка Листов */
+.sheets-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 25px;
+    margin-top: 30px;
+}
+
+.sheet-card {
+    background: rgba(255, 255, 255, 0.95);
+    color: #333;
+    border-radius: 8px;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+    position: relative;
+    transition: all 0.2s;
+    opacity: 0.6; /* Изначально полупрозрачные до участия в голосовании */
+}
+
+.sheet-preview {
+    width: 100%;
+    height: 150px;
+    background: white;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    object-fit: contain;
+}
+
+.sheet-meta {
+    font-size: 11px;
+    color: #666;
+    margin-top: 10px;
+    text-align: center;
+    width: 100%;
+    border-top: 1px solid #eee;
+    padding-top: 8px;
+}
+
+.vote-section {
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+/* Экран редактора */
+#editor-screen {
+    position: fixed;
+    top: 0; left: 0; width: 100vw; height: 100vh;
+    background: #222;
+    display: flex;
+    flex-direction: column;
+    z-index: 10;
+}
+.editor-header {
+    background: #111;
+    padding: 15px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.editor-workspace {
+    display: flex;
+    flex: 1;
+}
+.toolbar {
+    width: 220px;
+    background: #333;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    border-right: 2px solid #444;
+}
+.tool-btn {
+    background: #444;
+    text-align: left;
+    padding: 8px 12px;
+}
+.tool-btn.active {
+    background: #2ecc71;
+}
+.tool-btn.red { background: #c0392b; }
+.tool-btn.red:hover { background: #962d22; }
+
+.canvas-container {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #444;
+    overflow: auto;
+}
+canvas {
+    background: white;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    cursor: crosshair;
+}
+
+/* Светящийся лист дня */
+.glowing-winner {
+    position: fixed;
+    right: 20px;
+    bottom: 80px;
+    background: white;
+    border: 3px solid #fbdd09;
+    box-shadow: 0 0 20px #fbdd09, 0 0 40px #fbdd09;
+    padding: 10px;
+    border-radius: 8px;
+    text-align: center;
+    animation: glow 2s infinite alternate;
+    color: #333;
+}
+@keyframes glow {
+    from { box-shadow: 0 0 10px #fbdd09; }
+    to { box-shadow: 0 0 25px #fbdd09, 0 0 40px #009543; }
+}
+
+/* Модалка */
+.modal {
+    position: fixed;
+    top:0; left:0; width:100%; height:100%;
+    background: rgba(0,0,0,0.8);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 100;
+}
+.modal-content {
+    background: #333;
+    padding: 25px;
+    border-radius: 10px;
+    max-width: 500px;
+    width: 90%;
+}
+.close-modal {
+    float: right;
+    font-size: 28px;
+    cursor: pointer;
+}
+
+/* СИСТЕМА ГОЛОСОВАНИЯ */
+
+/* Листы становятся активными и кликабельными только после кнопки Участвовать */
+.sheet-card.active-voting {
+    opacity: 1;
+    cursor: pointer;
+    border: 2px dashed #b4b8bc;
+}
+.sheet-card.active-voting:hover {
+    transform: translateY(-5px);
+    border-color: #3498db;
+}
+
+/* Карточка листа, за который отдан текущий голос пользователя */
+.sheet-card.my-vote {
+    border: 3px solid #28a745 !important;
+    background-color: rgba(40, 167, 69, 0.05);
+    box-shadow: 0 8px 20px rgba(40, 167, 69, 0.3);
+}
+.sheet-card.my-vote::before {
+    content: "✓ Твой выбор";
+    position: absolute;
+    top: -12px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #28a745;
+    color: white;
+    padding: 3px 10px;
+    font-size: 0.75rem;
+    border-radius: 10px;
+    font-weight: bold;
+    z-index: 5;
+}
+
+.status-text {
+    font-size: 0.85rem;
+    font-style: italic;
+    opacity: 0.9;
+    text-align: right;
+}
